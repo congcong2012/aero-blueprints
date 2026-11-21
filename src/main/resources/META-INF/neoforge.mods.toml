@@ -1,0 +1,47 @@
+modLoader="javafml"
+loaderVersion="[4,)"
+license="MIT"
+
+[[mixins]]
+config="aeroblueprints.mixins.json"
+
+[[mods]]
+modId="aeroblueprints"
+version="${file.jarVersion}"
+displayName="Aero Blueprints"
+authors="Aero Blueprints"
+description='''
+让机械动力的蓝图加农炮可以把蓝图直接打印到 Sable / 机械动力：航空学 的物理结构上。
+打印出来的方块会成为结构本身的一部分，随船一起移动、旋转并参与物理运算。
+
+Lets the Create schematicannon print schematics directly onto Sable sub-levels
+(Create: Aeronautics physics structures).
+'''
+
+[[dependencies.aeroblueprints]]
+modId="neoforge"
+type="required"
+versionRange="[21.1.228,)"
+ordering="NONE"
+side="BOTH"
+
+[[dependencies.aeroblueprints]]
+modId="minecraft"
+type="required"
+versionRange="[1.21.1,1.22)"
+ordering="NONE"
+side="BOTH"
+
+[[dependencies.aeroblueprints]]
+modId="create"
+type="required"
+versionRange="[6.0.10,)"
+ordering="NONE"
+side="BOTH"
+
+[[dependencies.aeroblueprints]]
+modId="sable"
+type="required"
+versionRange="[2.0.0,3.0.0)"
+ordering="AFTER"
+side="BOTH"

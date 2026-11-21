@@ -1,0 +1,16 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "com.aeroblueprints.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": [
+    "LaunchedItemForBeltMixin",
+    "LaunchedItemForBlockStateMixin",
+    "LaunchedItemMixin",
+    "SchematicannonBlockEntityMixin",
+    "SchematicPrinterMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}
