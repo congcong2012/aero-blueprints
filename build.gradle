@@ -1,0 +1,97 @@
+plugins {
+    id 'java-library'
+    id 'net.neoforged.moddev' version '2.0.148'
+}
+
+version = project.mod_version
+group = 'com.aeroblueprints'
+
+base {
+    archivesName = "aeroblueprints-${project.minecraft_version}"
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
+
+repositories {
+    mavenCentral()
+    maven {
+        name = 'Create'
+        url = 'https://maven.createmod.net'
+    }
+    maven {
+        name = 'RyanHCode releases'
+        url = 'https://maven.ryanhcode.dev/releases'
+    }
+    maven {
+        name = 'RyanHCode snapshots'
+        url = 'https://maven.ryanhcode.dev/snapshots'
+    }
+}
+
+neoForge {
+    version = project.neoforge_version
+
+    runs {
+        client {
+            client()
+        }
+        server {
+            server()
+        }
+    }
+
+    mods {
+        aeroblueprints {
+            sourceSet sourceSets.main
+        }
+    }
+}
+
+// Create and Sable are supplied by the player at runtime and never bundled into the jar.
+// libs/ holds local copies so both the build and the dev runs work offline; without them
+// Gradle falls back to maven (compile only, dev runs then need the mods installed by hand).
+def localDeps = [
+        file('libs/create-1.21.1-6.0.10-280.jar'),
+        file('libs/sable-neoforge-1.21.1-2.0.6.jar'),
+        file('libs/sable-companion-common-1.21.1-1.6.0.jar'),
+]
+
+dependencies {
+    // Create's own library jars (Ponder/Catnip, Flywheel, Registrate). Create ships them as
+    // jar-in-jar at runtime; they are only needed here so javac can resolve Create's types.
+    compileOnly fileTree(dir: 'libs/jij', include: '*.jar')
+
+    if (localDeps.every { it.exists() }) {
+        implementation files(localDeps)
+    } else {
+        compileOnly("com.simibubi.create:create-${project.minecraft_version}:${project.create_version}:slim") {
+            transitive = false
+        }
+        compileOnly("dev.ryanhcode.sable:sable-neoforge-${project.minecraft_version}:${project.sable_version}") {
+            transitive = false
+        }
+        compileOnly("dev.ryanhcode.sable-companion:sable-companion-common-${project.minecraft_version}:${project.sable_companion_version}") {
+            transitive = false
+        }
+    }
+}
+
+jar {
+    manifest {
+        attributes([
+                'Specification-Title'   : 'aeroblueprints',
+                'Specification-Vendor'  : 'aeroblueprints',
+                'Specification-Version' : '1',
+                'Implementation-Title'  : 'Aero Blueprints',
+                'Implementation-Version': project.version
+        ])
+    }
+}
