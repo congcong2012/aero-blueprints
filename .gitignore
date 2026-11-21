@@ -1,0 +1,11 @@
+build/
+.gradle/
+run/
+runs/
+*.log
+.idea/
+*.iml
+
+# Third-party mod jars used for offline builds - never commit these
+libs/*.jar
+libs/jij/
