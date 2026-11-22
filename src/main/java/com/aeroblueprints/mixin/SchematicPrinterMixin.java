@@ -1,14 +1,16 @@
 package com.aeroblueprints.mixin;
 
-import com.aeroblueprints.AeroBlueprintConfig;
 import com.aeroblueprints.AeroBlueprints;
 import com.aeroblueprints.sublevel.SubLevelPrintHolder;
 import com.aeroblueprints.sublevel.SubLevelPrintSession;
 import com.aeroblueprints.sublevel.SubLevelPrinting;
+import com.simibubi.create.AllDataComponents;
 import com.simibubi.create.content.schematics.SchematicPrinter;
 import com.simibubi.create.foundation.blockEntity.IMergeableBE;
+import dev.ryanhcode.sable.Sable;
 import dev.ryanhcode.sable.api.sublevel.ServerSubLevelContainer;
 import dev.ryanhcode.sable.api.sublevel.SubLevelContainer;
+import dev.ryanhcode.sable.sublevel.SubLevel;
 import dev.ryanhcode.sable.sublevel.plot.LevelPlot;
 import net.minecraft.core.BlockPos;
 import net.minecraft.nbt.CompoundTag;
@@ -16,12 +18,15 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.Mirror;
+import net.minecraft.world.level.block.Rotation;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.BedPart;
 import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import net.minecraft.world.level.block.state.properties.DoubleBlockHalf;
 import org.jetbrains.annotations.Nullable;
+import org.joml.Vector3d;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.Unique;
@@ -65,8 +70,21 @@ public abstract class SchematicPrinterMixin implements SubLevelPrintHolder {
     @Unique
     private @Nullable SubLevelPrintSession aeroblueprints$session;
 
+    /**
+     * Set while a schematic is being loaded, when the blueprint's anchor had to be translated
+     * out of plot space. Consumed by the tail of {@code loadSchematic}.
+     */
+    @Unique
+    private @Nullable SubLevelPrintSession aeroblueprints$pendingSession;
+
+    @Unique
+    private @Nullable BlockPos aeroblueprints$originalAnchor;
+
     @Shadow
     public abstract boolean isErrored();
+
+    @Shadow
+    public abstract boolean isWorldEmpty();
 
     @Shadow
     public abstract void handleCurrentTarget(SchematicPrinter.BlockTargetHandler blockHandler,
@@ -82,30 +100,98 @@ public abstract class SchematicPrinterMixin implements SubLevelPrintHolder {
         this.aeroblueprints$session = session;
     }
 
+    /**
+     * When the blueprint was deployed on a physics structure, its anchor is a plot coordinate
+     * (millions of blocks away). Left alone, the printer works entirely in plot space: every
+     * target is checked with {@code world.isLoaded}, which is false for plot chunks that have
+     * not been created yet, so those blocks are skipped without a trace.
+     * <p>
+     * Translating the anchor into world space for the loading step puts the print on the same
+     * path as a normal blueprint, and the session maps each world target back into the plot
+     * when the block actually lands.
+     */
     @Inject(method = "loadSchematic(Lnet/minecraft/world/item/ItemStack;Lnet/minecraft/world/level/Level;Z)V",
             at = @At("HEAD"))
-    private void aeroblueprints$clearBeforeLoad(final ItemStack blueprint, final Level world,
-                                                final boolean processNBT, final CallbackInfo ci) {
+    private void aeroblueprints$prepareAnchor(final ItemStack blueprint, final Level world,
+                                              final boolean processNBT, final CallbackInfo ci) {
         this.aeroblueprints$session = null;
+        this.aeroblueprints$pendingSession = null;
+
+        if (world.isClientSide() || !(world instanceof final ServerLevel serverLevel)) {
+            return;
+        }
+        if (!blueprint.has(AllDataComponents.SCHEMATIC_ANCHOR)) {
+            return;
+        }
+
+        final BlockPos plotAnchor = blueprint.get(AllDataComponents.SCHEMATIC_ANCHOR);
+        if (plotAnchor == null) {
+            return;
+        }
+
+        // Not inside a plot: the blueprint was deployed in the world, nothing to translate.
+        final SubLevel subLevel = Sable.HELPER.getContaining(serverLevel, plotAnchor);
+        if (subLevel == null) {
+            return;
+        }
+
+        // Rotated or mirrored blueprints use the anchor as their rotation pivot, so moving the
+        // anchor would skew the whole print. Leave those alone rather than producing garbage.
+        final Rotation rotation = blueprint.getOrDefault(AllDataComponents.SCHEMATIC_ROTATION, Rotation.NONE);
+        final Mirror mirror = blueprint.getOrDefault(AllDataComponents.SCHEMATIC_MIRROR, Mirror.NONE);
+        if (rotation != Rotation.NONE || mirror != Mirror.NONE) {
+            AeroBlueprints.LOGGER.warn(
+                    "[Aero Blueprints] blueprint at {} is deployed on a sub-level but rotated/mirrored ({} / {}); "
+                            + "printing it in plot space is not supported, deploy it without rotation",
+                    plotAnchor, rotation, mirror);
+            return;
+        }
+
+        final Vector3d worldAnchor = new Vector3d(plotAnchor.getX() + 0.5D, plotAnchor.getY() + 0.5D, plotAnchor.getZ() + 0.5D);
+        subLevel.logicalPose().transformPosition(worldAnchor);
+        final BlockPos translated = BlockPos.containing(worldAnchor.x, worldAnchor.y, worldAnchor.z);
+
+        // Rewrite the component only for the duration of this call: Create reads the anchor
+        // from the stack a few lines later, and the original value is restored on every
+        // return path. The blueprint item itself is therefore left untouched.
+        this.aeroblueprints$originalAnchor = plotAnchor;
+        this.aeroblueprints$pendingSession = new SubLevelPrintSession(translated, plotAnchor, subLevel.getUniqueId());
+        blueprint.set(AllDataComponents.SCHEMATIC_ANCHOR, translated);
+
+        AeroBlueprints.LOGGER.info("[Aero Blueprints] blueprint anchor {} is plot space; loading it at world {}",
+                plotAnchor, translated);
+    }
+
+    @Inject(method = "loadSchematic(Lnet/minecraft/world/item/ItemStack;Lnet/minecraft/world/level/Level;Z)V",
+            at = @At("RETURN"))
+    private void aeroblueprints$restoreAnchor(final ItemStack blueprint, final Level world,
+                                              final boolean processNBT, final CallbackInfo ci) {
+        if (this.aeroblueprints$originalAnchor != null) {
+            blueprint.set(AllDataComponents.SCHEMATIC_ANCHOR, this.aeroblueprints$originalAnchor);
+            this.aeroblueprints$originalAnchor = null;
+        }
     }
 
     @Inject(method = "loadSchematic(Lnet/minecraft/world/item/ItemStack;Lnet/minecraft/world/level/Level;Z)V",
             at = @At("TAIL"))
     private void aeroblueprints$latchSession(final ItemStack blueprint, final Level world,
                                              final boolean processNBT, final CallbackInfo ci) {
-        if (world.isClientSide() || !this.schematicLoaded || this.isErrored()) {
-            return;
-        }
-        if (!(world instanceof final ServerLevel serverLevel) || this.schematicAnchor == null) {
+        if (world.isClientSide() || !(world instanceof final ServerLevel serverLevel)) {
+            this.aeroblueprints$pendingSession = null;
             return;
         }
 
-        this.aeroblueprints$session = SubLevelPrinting.latch(serverLevel, this.schematicAnchor);
-
-        if (this.aeroblueprints$session != null && AeroBlueprintConfig.DEBUG.get()) {
-            AeroBlueprints.LOGGER.info("[Aero Blueprints] print session latched: world {} -> plot {}",
-                    this.aeroblueprints$session.worldAnchor(), this.aeroblueprints$session.plotAnchor());
+        if (this.aeroblueprints$pendingSession != null) {
+            this.aeroblueprints$session = this.aeroblueprints$pendingSession;
+        } else if (this.schematicLoaded && !this.isErrored() && this.schematicAnchor != null) {
+            this.aeroblueprints$session = SubLevelPrinting.latch(serverLevel, this.schematicAnchor);
         }
+
+        this.aeroblueprints$pendingSession = null;
+
+        AeroBlueprints.LOGGER.info(
+                "[Aero Blueprints] schematic loaded: anchor={} errored={} empty={} session={}",
+                this.schematicAnchor, this.isErrored(), this.isWorldEmpty(), this.aeroblueprints$session);
     }
 
     @Inject(method = "resetSchematic()V", at = @At("HEAD"))
