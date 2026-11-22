@@ -50,7 +50,7 @@ Sable 把物理结构的方块存在一块独立的 **plot**（保留区块网�
 
 | 情况 | 行为 |
 | --- | --- |
-| 蓝图锚点已经在 plot 坐标里（站在船上部署的蓝图） | 原版逻辑本来就写进结构，模组不介入 |
+| 蓝图锚点在 plot 坐标里（站在船上部署的蓝图） | 自动换算成世界坐标加载，再映射回结构放置 |
 | 蓝图锚点在世界中，且落在某个子关卡的包围盒内（允许 1.5 格外扩） | 启用坐标换算 |
 | 蓝图锚点在世界中，找不到结构 | 完全走原版行为，无副作用 |
 | 加农炮放在船上、蓝图部署在世界中 | 256 格射程检查会自动换算到同一坐标系 |
@@ -72,7 +72,7 @@ Sable 把物理结构的方块存在一块独立的 **plot**（保留区块网�
 
 ```bash
 ./build.sh build
-# 产物：build/libs/aeroblueprints-1.21.1-1.0.0.jar
+# 产物：build/libs/aeroblueprints-1.21.1-1.0.1.jar
 
 ./build.sh runServer    # 起一个带 Create + Sable 的开发服务端
 ./build.sh runClient    # 起开发客户端
@@ -86,13 +86,15 @@ Create 自带的三件套（Ponder/Catnip、Flywheel、Registrate）。有这些
 
 ### 启动自检
 
-开发或排查兼容问题时可以打开自检，它会在模组加载阶段就强制加载被 patch 的 Create 类：
+开发或排查兼容问题时可以打开自检，它会在模组加载阶段就强制加载被 patch 的 Create 类，
+并在服务端启动后跑一遍完整的打印流程（组装子关卡 → 加载蓝图 → 模拟一发炮弹）：
 
 ```bash
 JAVA_TOOL_OPTIONS="-Daeroblueprints.selftest=true" ./build.sh runServer
 ```
 
-日志里应当出现五行 `self-test: ... loaded (session=..., plotTarget=...)`。
+日志里应当出现五行 `self-test: ... loaded (session=..., plotTarget=...)`，以及
+`[diag] shot: ... landed=Block{minecraft:gold_block}`。
 本模组已在 Create 6.0.10-280 + Sable 2.0.6 的开发服务端上验证通过这套自检。
 
 ## 实现概要
@@ -111,6 +113,21 @@ JAVA_TOOL_OPTIONS="-Daeroblueprints.selftest=true" ./build.sh runServer
 Sable 会拦截 plot 区块的方块读写，所以写入 plot 和写入世界用的是同一套
 `Level#setBlock` / `BlockHelper#placeSchematicBlock`：方块变更会自动回流到质量追踪、碰撞形状
 与客户端同步，不需要额外通知物理系统。
+
+## 排查
+
+打印开始时日志会输出一行：
+
+```
+[Aero Blueprints] schematic loaded: anchor=... errored=... empty=... session=...
+[Aero Blueprints] blueprint anchor ... is plot space; loading it at world ...
+```
+
+- `empty=true`：蓝图内容没读出来。Create 要求 `SCHEMATIC_OWNER` 非空、文件名以 `.nbt` 结尾、
+  文件位于 `schematics/uploaded/<owner>/` 下；不满足时加农炮会判定「蓝图已过期」并**消耗掉蓝图**，
+  表现为放进去就没了、什么都不打印。这种情况与本模组无关。
+- `errored=true`：蓝图解析时抛了异常，日志上方会有 Create 的 `Failed to load Schematic for Printing` 堆栈。
+- `session=null` 且锚点在世界中：说明锚点附近没有物理结构，走的是原版打印。
 
 ## 已知限制
 
